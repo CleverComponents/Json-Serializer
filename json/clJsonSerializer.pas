@@ -51,11 +51,102 @@ type
     function ObjectToJson(AObject: TObject): string; override;
   end;
 
+  /// Class with autoclean class-members and DynArray of objects
+  TclJsonParsedObject = class
+  public
+    constructor Create;
+    destructor  Destroy; override;
+  end;
+
 resourcestring
   cUnsupportedDataType = 'Unsupported data type';
   cNonSerializable = 'The object is not serializable';
 
 implementation
+
+{ TclJsonParsedObject }
+
+constructor TclJsonParsedObject.Create;
+var
+  ctx: TRttiContext;
+  rType: TRttiType;
+  rProp: TRttiProperty;
+begin
+  inherited Create();
+
+  ctx := TRttiContext.Create();
+  try
+    rType := ctx.GetType(Self.ClassInfo);
+
+    for rProp in rType.GetProperties() do
+      if rProp.PropertyType.TypeKind in [tkDynArray, tkClass] then
+        rProp.SetValue(Self, nil);
+  finally
+    ctx.Free();
+  end;
+end;
+
+destructor TclJsonParsedObject.Destroy;
+  procedure FreeAndNilArray(AProperty: TRttiProperty; AObject: TObject);
+  var
+    elType: PTypeInfo;
+    rValue, rItemValue: TValue;
+    i: Integer;
+    xObject: TObject;
+  begin
+    if (GetTypeData(AProperty.PropertyType.Handle).DynArrElType = nil) then Exit;
+    elType := GetTypeData(AProperty.PropertyType.Handle).DynArrElType^;
+
+    if (elType.Kind = tkClass) then
+    begin
+      rValue := AProperty.GetValue(AObject);
+      if not rValue.IsEmpty then
+      for i := 0 to rValue.GetArrayLength - 1 do
+      begin
+        rItemValue := rValue.GetArrayElement(i);
+        if not rItemValue.IsEmpty then
+        begin
+          xObject := rItemValue.AsObject;
+          FreeAndNil(xObject);
+          rValue.SetArrayElement(i, nil);
+        end;
+        AProperty.SetValue(AObject, nil);
+      end;
+    end;
+  end;
+var
+  ctx: TRttiContext;
+  rType: TRttiType;
+  rProp: TRttiProperty;
+  rValue: TValue;
+  xObject: TObject;
+begin
+  ctx := TRttiContext.Create();
+  try
+    rType := ctx.GetType(Self.ClassInfo);
+
+    for rProp in rType.GetProperties() do
+      case rProp.PropertyType.TypeKind of
+        tkDynArray:
+          FreeAndNilArray(rProp, Self);
+
+        tkClass:
+        begin
+          rValue := rProp.GetValue(Self);
+          if not rValue.IsEmpty then
+          begin
+            xObject := rValue.AsObject;
+            FreeAndNil(xObject);
+            rProp.SetValue(Self, nil);
+          end;
+        end;
+      end;
+  finally
+    ctx.Free();
+  end;
+
+  inherited;
+end;
 
 { TclJsonSerializer }
 
@@ -90,11 +181,12 @@ procedure TclJsonSerializer.DeserializeArray(AProperty: TRttiProperty;
   AObject: TObject; AJsonArray: TclJSONArray);
 var
   elType: PTypeInfo;
-  len: LongInt;
+  len: NativeInt;  // using NativeInt for work in x32/x64 platforms
   pArr: Pointer;
   rValue, rItemValue: TValue;
   i: Integer;
   objClass: TClass;
+  xObject: TObject;
 begin
   len := AJsonArray.Count;
   if (len = 0) then Exit;
@@ -105,6 +197,25 @@ begin
 
   pArr := nil;
 
+  // clean array's items - old values of objects
+  if (elType.Kind = tkClass) then
+  begin
+    rValue := AProperty.GetValue(AObject);
+    if not rValue.IsEmpty then
+    for i := 0 to rValue.GetArrayLength - 1 do
+    begin
+      rItemValue := rValue.GetArrayElement(i);
+      if not rItemValue.IsEmpty then
+      begin
+        xObject := rItemValue.AsObject;
+        FreeAndNil(xObject);
+        rValue.SetArrayElement(i, nil);
+      end;
+      AProperty.SetValue(AObject, nil);
+    end;
+  end;
+  //
+
   DynArraySetLength(pArr, AProperty.PropertyType.Handle, 1, @len);
   try
     TValue.Make(@pArr, AProperty.PropertyType.Handle, rValue);
@@ -114,7 +225,8 @@ begin
 
       case elType.Kind of
         tkClass:
-          if (AJsonArray.Items[i] is TclJSONObject) then begin
+          if (AJsonArray.Items[i] is TclJSONObject) then
+          begin
             objClass := elType.TypeData.ClassType;
             rItemValue := Deserialize(objClass, TclJSONObject(AJsonArray.Items[i]));
           end;
@@ -139,34 +251,6 @@ begin
         else
           raise EclJsonSerializerError.Create(cUnsupportedDataType);
       end;
-
-      // if (elType.Kind = tkClass)
-      //   and (AJsonArray.Items[i] is TclJSONObject) then
-      // begin
-      //   objClass := elType.TypeData.ClassType;
-      //   rItemValue := Deserialize(objClass, TclJSONObject(AJsonArray.Items[i]));
-      // end else
-      // if (elType.Kind in [tkString, tkLString, tkWString, tkUString]) then
-      // begin
-      //   rItemValue := AJsonArray.Items[i].ValueString;
-      // end else
-      // if (elType.Kind = tkInteger) then
-      // begin
-      //   rItemValue := StrToInt(AJsonArray.Items[i].ValueString);
-      // end else
-      // if (elType.Kind = tkInt64) then
-      // begin
-      //   rItemValue := StrToInt64(AJsonArray.Items[i].ValueString);
-      // end else
-      // if (elType.Kind = tkEnumeration)
-      //   and (elType = System.TypeInfo(Boolean))
-      //   and (AJsonArray.Items[i] is TclJSONBoolean) then
-      // begin
-      //   rItemValue := TclJSONBoolean(AJsonArray.Items[i]).Value;
-      // end else
-      // begin
-      //   raise EclJsonSerializerError.Create(cUnsupportedDataType);
-      // end;
 
       rValue.SetArrayElement(i, rItemValue);
     end;
@@ -260,6 +344,7 @@ var
   nonSerializable: Boolean;
   requiredAttr: TclJsonRequiredAttribute;
   propAttr: TclJsonPropertyAttribute;
+  xObject: TObject;
 begin
   Result := AObject;
 
@@ -290,6 +375,17 @@ begin
           tkClass:
             if (member.Value is TclJSONObject) then begin
               objClass := rProp.PropertyType.Handle^.TypeData.ClassType;
+
+              // clean fields - old values of objects
+              rValue := rProp.GetValue(Result);
+              if not rValue.IsEmpty then
+              begin
+                xObject := rValue.AsObject;
+                FreeAndNil(xObject);
+                rProp.SetValue(Result, nil);
+              end;
+              //
+
               rValue := Deserialize(objClass, TclJSONObject(member.Value));
               rProp.SetValue(Result, rValue);
             end;
@@ -323,44 +419,6 @@ begin
           else
             raise EclJsonSerializerError.Create(cUnsupportedDataType);
         end;
-
-        // if (rProp.PropertyType.TypeKind = tkDynArray)
-        //   and (member.Value is TclJSONArray) then
-        // begin
-        //   DeserializeArray(rProp, Result, TclJSONArray(member.Value));
-        // end else
-        // if (rProp.PropertyType.TypeKind = tkClass)
-        //   and (member.Value is TclJSONObject) then
-        // begin
-        //   objClass := rProp.PropertyType.Handle^.TypeData.ClassType;
-        //   rValue := Deserialize(objClass, TclJSONObject(member.Value));
-        //   rProp.SetValue(Result, rValue);
-        // end else
-        // if (rProp.PropertyType.TypeKind in [tkString, tkLString, tkWString, tkUString]) then
-        // begin
-        //   rValue := member.ValueString;
-        //   rProp.SetValue(Result, rValue);
-        // end else
-        // if (rProp.PropertyType.TypeKind = tkInteger) then
-        // begin
-        //   rValue := StrToInt(member.ValueString);
-        //   rProp.SetValue(Result, rValue);
-        // end else
-        // if (rProp.PropertyType.TypeKind = tkInt64) then
-        // begin
-        //   rValue := StrToInt64(member.ValueString);
-        //   rProp.SetValue(Result, rValue);
-        // end else
-        // if (rProp.PropertyType.TypeKind = tkEnumeration)
-        //   and (rProp.GetValue(Result).TypeInfo = System.TypeInfo(Boolean))
-        //   and (member.Value is TclJSONBoolean) then
-        // begin
-        //   rValue := TclJSONBoolean(member.Value).Value;
-        //   rProp.SetValue(Result, rValue);
-        // end else
-        // begin
-        //   raise EclJsonSerializerError.Create(cUnsupportedDataType);
-        // end;
       end;
     end;
   finally
@@ -423,7 +481,8 @@ var
   requiredAttr: TclJsonRequiredAttribute;
   propAttr: TclJsonPropertyAttribute;
 begin
-  if (AObject = nil) then begin
+  if (AObject = nil) then
+  begin
     Result := nil;
     Exit;
   end;
@@ -462,9 +521,6 @@ begin
 
             tkFloat:
               Result.AddSingle(TclJsonPropertyAttribute(propAttr).Name, rProp.GetValue(AObject).AsType<Single>);
-
-            tkRecord:
-              Result.AddMember(TclJsonPropertyAttribute(propAttr).Name, Serialize(rProp.GetValue(AObject)));
 
             tkEnumeration:
               if rProp.GetValue(AObject).TypeInfo = System.TypeInfo(Boolean) then
@@ -529,33 +585,6 @@ begin
         else
           raise EclJsonSerializerError.Create(cUnsupportedDataType);
       end;
-
-      // if (rValue.GetArrayElement(i).Kind = tkClass) then
-      // begin
-      //   arr.Add(Serialize(rValue.GetArrayElement(i).AsObject()));
-      // end else
-      // if (rValue.GetArrayElement(i).Kind in [tkString, tkLString, tkWString, tkUString]) then
-      // begin
-      //   if (Attribute is TclJsonStringAttribute) then
-      //   begin
-      //     arr.Add(TclJSONString.Create(rValue.GetArrayElement(i).AsString()));
-      //   end else
-      //   begin
-      //     arr.Add(TclJSONValue.Create(rValue.GetArrayElement(i).AsString()));
-      //   end;
-      // end else
-      // if (rValue.GetArrayElement(i).Kind in [tkInteger, tkInt64]) then
-      // begin
-      //   arr.Add(TclJSONValue.Create(rValue.GetArrayElement(i).ToString()));
-      // end else
-      // if (rValue.GetArrayElement(i).Kind = tkEnumeration)
-      //   and (rValue.GetArrayElement(i).TypeInfo = System.TypeInfo(Boolean)) then
-      // begin
-      //   arr.Add(TclJSONBoolean.Create(rValue.GetArrayElement(i).AsBoolean()));
-      // end else
-      // begin
-      //   raise EclJsonSerializerError.Create(cUnsupportedDataType);
-      // end;
     end;
   end;
 end;
