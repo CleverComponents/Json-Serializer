@@ -40,7 +40,7 @@ type
 
     procedure SerializeArray(AProperty: TRttiProperty; AObject: TObject;
       Attribute: TclJsonPropertyAttribute; AJson: TclJsonObject);
-    procedure DeserializeArray(AProperty: TRttiProperty; AObject: TObject; AJsonArray: TclJSONArray);
+    procedure DeserializeArray(var rValue: TValue; AJsonArray: TclJSONArray);
 
     function Deserialize(AType: TClass; const AJson: TclJSONObject): TObject; overload;
     function Deserialize(AObject: TObject; const AJson: TclJSONObject): TObject; overload;
@@ -86,34 +86,31 @@ begin
   end;
 end;
 
-destructor TclJsonParsedObject.Destroy;
-  procedure FreeAndNilArray(AProperty: TRttiProperty; AObject: TObject);
-  var
-    elType: PTypeInfo;
-    rValue, rItemValue: TValue;
-    i: Integer;
-    xObject: TObject;
+procedure FreeAndNilArray(var rValue: TValue);
+var
+  rItemValue: TValue;
+  i: Integer;
+  xObject: TObject;
+begin
+  for i := 0 to rValue.GetArrayLength - 1 do
   begin
-    if (GetTypeData(AProperty.PropertyType.Handle).DynArrElType = nil) then Exit;
-    elType := GetTypeData(AProperty.PropertyType.Handle).DynArrElType^;
-
-    if (elType.Kind = tkClass) then
-    begin
-      rValue := AProperty.GetValue(AObject);
-      if not rValue.IsEmpty then
-      for i := 0 to rValue.GetArrayLength - 1 do
+    rItemValue := rValue.GetArrayElement(i);
+    if rItemValue.IsEmpty then
+      Continue;
+    case rItemValue.Kind of
+      tkDynArray:
+        FreeAndNilArray(rItemValue);
+      tkClass:
       begin
-        rItemValue := rValue.GetArrayElement(i);
-        if not rItemValue.IsEmpty then
-        begin
-          xObject := rItemValue.AsObject;
-          FreeAndNil(xObject);
-          rValue.SetArrayElement(i, nil);
-        end;
-        AProperty.SetValue(AObject, nil);
+        xObject := rItemValue.AsObject;
+        FreeAndNil(xObject);
+        rValue.SetArrayElement(i, nil);
       end;
     end;
   end;
+end;
+
+destructor TclJsonParsedObject.Destroy;
 var
   ctx: TRttiContext;
   rType: TRttiType;
@@ -128,7 +125,14 @@ begin
     for rProp in rType.GetProperties() do
       case rProp.PropertyType.TypeKind of
         tkDynArray:
-          FreeAndNilArray(rProp, Self);
+        begin
+          rValue := rProp.GetValue(Self);
+          if not rValue.IsEmpty then
+          begin
+            FreeAndNilArray(rValue);
+            rProp.SetValue(Self, nil);
+          end;
+        end;
 
         tkClass:
         begin
@@ -177,48 +181,28 @@ begin
   end;
 end;
 
-procedure TclJsonSerializer.DeserializeArray(AProperty: TRttiProperty;
-  AObject: TObject; AJsonArray: TclJSONArray);
+procedure TclJsonSerializer.DeserializeArray(var rValue: TValue; AJsonArray: TclJSONArray);
 var
   elType: PTypeInfo;
   len: NativeInt;  // using NativeInt for work in x32/x64 platforms
-  pArr: Pointer;
-  rValue, rItemValue: TValue;
+  pArr, pArrItem: Pointer;
+  rItemValue: TValue;
   i: Integer;
   objClass: TClass;
-  xObject: TObject;
 begin
+  FreeAndNilArray(rValue);
+
   len := AJsonArray.Count;
   if (len = 0) then Exit;
 
-  if (GetTypeData(AProperty.PropertyType.Handle).DynArrElType = nil) then Exit;
-
-  elType := GetTypeData(AProperty.PropertyType.Handle).DynArrElType^;
+  if rValue.TypeData.DynArrElType^ = nil then Exit;
+  elType := rValue.TypeData.DynArrElType^;
 
   pArr := nil;
 
-  // clean array's items - old values of objects
-  if (elType.Kind = tkClass) then
-  begin
-    rValue := AProperty.GetValue(AObject);
-    if not rValue.IsEmpty then
-    for i := 0 to rValue.GetArrayLength - 1 do
-    begin
-      rItemValue := rValue.GetArrayElement(i);
-      if not rItemValue.IsEmpty then
-      begin
-        xObject := rItemValue.AsObject;
-        FreeAndNil(xObject);
-        rValue.SetArrayElement(i, nil);
-      end;
-      AProperty.SetValue(AObject, nil);
-    end;
-  end;
-  //
-
-  DynArraySetLength(pArr, AProperty.PropertyType.Handle, 1, @len);
+  DynArraySetLength(pArr, rValue.TypeInfo, 1, @len);
   try
-    TValue.Make(@pArr, AProperty.PropertyType.Handle, rValue);
+    TValue.Make(@pArr, rValue.TypeInfo, rValue);
 
     for i := 0 to AJsonArray.Count - 1 do
     begin
@@ -248,6 +232,20 @@ begin
             rItemValue := TclJSONBoolean(AJsonArray.Items[i]).Value;
           end;
 
+        tkDynArray:
+          if (AJsonArray.Items[i] is TclJSONArray) then
+          begin
+            len := 0;
+            pArrItem := nil;
+            DynArraySetLength(pArrItem, elType, 1, @len);
+            try
+              TValue.Make(@pArrItem, elType, rItemValue);
+              DeserializeArray(rItemValue, TclJSONArray(AJsonArray.Items[i]));
+            finally
+              DynArrayClear(pArrItem, elType);
+            end;
+          end;
+
         else
           raise EclJsonSerializerError.Create(cUnsupportedDataType);
       end;
@@ -255,9 +253,8 @@ begin
       rValue.SetArrayElement(i, rItemValue);
     end;
 
-    AProperty.SetValue(AObject, rValue);
   finally
-    DynArrayClear(pArr, AProperty.PropertyType.Handle);
+    DynArrayClear(pArr, rValue.TypeInfo);
   end;
 end;
 
@@ -370,7 +367,11 @@ begin
         case rProp.PropertyType.TypeKind of
           tkDynArray:
             if (member.Value is TclJSONArray) then
-              DeserializeArray(rProp, Result, TclJSONArray(member.Value));
+            begin
+              rValue := rProp.GetValue(Result);
+              DeserializeArray(rValue, TclJSONArray(member.Value));
+              rProp.SetValue(Result, rValue);
+            end;
 
           tkClass:
             if (member.Value is TclJSONObject) then begin

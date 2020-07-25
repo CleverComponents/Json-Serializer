@@ -32,7 +32,7 @@ type
   EclJsonSerializerError = class(Exception)
   end;
 
-  TclJsonPropertyAttribute = class (TCustomAttribute)
+  TclJsonPropertyAttribute = class(TCustomAttribute)
   strict private
     FName: string;
   public
