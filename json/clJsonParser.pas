@@ -26,7 +26,10 @@ unit clJsonParser;
 interface
 
 uses
-  System.Classes, System.SysUtils, System.Contnrs;
+  System.Classes,
+  System.SysUtils,
+  System.Contnrs,
+  System.Generics.Collections;
 
 type
   EclJSONError = class(Exception)
@@ -110,9 +113,21 @@ type
     procedure BuildJSONString(ABuffer: TStringBuilder); override;
   end;
 
+  TclJSONSingle = class(TclJSONValue)
+    private
+      function GetValue: Single;
+      procedure SetValue(const value: Single);
+    public
+      constructor Create; overload;
+      constructor Create(AValue: Single); overload;
+
+      property Value: Single read GetValue write SetValue;
+  end;
+
   TclJSONBoolean = class(TclJSONValue)
   private
     function GetValue: Boolean;
+
     procedure SetValue(const Value: Boolean);
   protected
     procedure SetValueWideString(const AValue: WideString); override;
@@ -189,6 +204,9 @@ type
 
     function AddBoolean(const AName: string; AValue: Boolean): TclJSONBoolean; overload;
     function AddBoolean(const AName: WideString; AValue: Boolean): TclJSONBoolean; overload;
+
+    function AddSingle(const AName: string; AValue: Single): TclJSONSingle; overload;
+    function AddSingle(const AName: WideString; AValue: Single): TclJSONSingle; overload;
 
     property Count: Integer read GetCount;
     property Members[Index: Integer]: TclJSONPair read GetMember;
@@ -1039,10 +1057,7 @@ end;
 
 function TclJSONArray.Add(AItem: TclJSONBase): TclJSONBase;
 begin
-  if (AItem <> nil) then
-  begin
-    FItems.Add(AItem);
-  end;
+  if (AItem <> nil) then FItems.Add(AItem);
   Result := AItem;
 end;
 
@@ -1187,6 +1202,50 @@ begin
   end else
   begin
     inherited SetValueWideString(JsonBoolean[False]);
+  end;
+end;
+
+function TclJSONSingle.GetValue: Single;
+begin
+  Result := StrToFloat(Self.ValueWideString);
+end;
+
+procedure TclJSONSingle.SetValue(const value: Single);
+begin
+  Self.ValueString := value.ToString;
+end;
+
+constructor TclJSONSingle.Create;
+begin
+  inherited Create();
+  Value := 0.0;
+end;
+
+constructor TclJSONSingle.Create(AValue: Single);
+begin
+  inherited Create();
+  Value := AValue;
+end;
+
+function TclJSONObject.AddSingle(const AName: string; AValue: Single): TclJSONSingle;
+begin
+  if (AValue <> 0.0) then
+  begin
+    Result := TclJSONSingle(AddMember(AName, TclJSONSingle.Create(AValue)));
+  end else
+  begin
+    Result := Nil;
+  end;
+end;
+
+function TclJSONObject.AddSingle(const AName: WideString; AValue: Single): TclJSONSingle;
+begin
+  if (AValue <> 0.0) then
+  begin
+    Result := TclJSONSingle(AddMember(AName, TclJSONSingle.Create(AValue)));
+  end else
+  begin
+    Result := Nil;
   end;
 end;
 
