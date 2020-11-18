@@ -90,7 +90,7 @@ procedure TclJsonSerializer.DeserializeArray(AProperty: TRttiProperty;
   AObject: TObject; AJsonArray: TclJSONArray);
 var
   elType: PTypeInfo;
-  len: LongInt;
+  len: NativeInt;
   pArr: Pointer;
   rValue, rItemValue: TValue;
   i: Integer;
