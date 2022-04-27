@@ -158,6 +158,22 @@ type
     property RequiredString: string read FRequiredString write FRequiredString;
   end;
 
+  TclTestEnum = (teOne, teTwo, teThree);
+
+  TclTestEnumPropertyObject = class
+  strict private
+    FEnum: TclTestEnum;
+    FEnumArray: TArray<TclTestEnum>;
+  public
+    constructor Create;
+
+    [TclJsonProperty('enum')]
+    property Enum: TclTestEnum read FEnum write FEnum;
+
+    [TclJsonProperty('enumArray')]
+    property EnumArray: TArray<TclTestEnum> read FEnumArray write FEnumArray;
+  end;
+
   TclJsonSerializerTests = class(TTestCase)
   published
     procedure TestDeserialize;
@@ -168,6 +184,7 @@ type
     procedure TestRequiredProperty;
     procedure TestMultipleTypeArray;
     procedure TestInheritedTypes;
+    procedure TestEnumProperty;
   end;
 
 implementation
@@ -250,6 +267,42 @@ begin
     CheckEquals(123, obj.IntegerValue);
     CheckEquals('asd', obj.Value);
     CheckEquals(True, obj.BooleanValue);
+  finally
+    obj.Free();
+    serializer.Free();
+  end;
+end;
+
+procedure TclJsonSerializerTests.TestEnumProperty;
+var
+  serializer: TclJsonSerializer;
+  obj: TclTestEnumPropertyObject;
+  json: string;
+  enumArr: TArray<TclTestEnum>;
+begin
+  serializer := nil;
+  obj := nil;
+  try
+    serializer := TclJsonSerializer.Create();
+
+    obj := TclTestEnumPropertyObject.Create();
+    obj.Enum := teTwo;
+
+    SetLength(enumArr, 2);
+    obj.EnumArray := enumArr;
+    enumArr[0] := teTwo;
+    enumArr[1] := teThree;
+
+    json := serializer.ObjectToJson(obj);
+    CheckEquals('{"enum": teTwo, "enumArray": [teTwo, teThree]}', json);
+    FreeAndNil(obj);
+
+    obj := serializer.JsonToObject(TclTestEnumPropertyObject, json) as TclTestEnumPropertyObject;
+    Assert(teTwo = obj.Enum);
+    CheckEquals(2, Length(obj.EnumArray));
+    Assert(teTwo = obj.EnumArray[0]);
+    Assert(teThree = obj.EnumArray[1]);
+    FreeAndNil(obj);
   finally
     obj.Free();
     serializer.Free();
@@ -596,6 +649,14 @@ begin
   end;
 
   FObjArray := Value;
+end;
+
+{ TclTestEnumPropertyObject }
+
+constructor TclTestEnumPropertyObject.Create;
+begin
+  inherited Create();
+  FEnumArray := nil;
 end;
 
 initialization
