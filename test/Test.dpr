@@ -12,6 +12,7 @@ uses
 {$R *.res}
 
 begin
+  System.ReportMemoryLeaksOnShutdown := True;
   Application.Initialize;
   GUITestRunner.RunRegisteredTests;
 end.

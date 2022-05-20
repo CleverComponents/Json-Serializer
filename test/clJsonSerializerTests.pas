@@ -160,10 +160,15 @@ type
 
   TclTestEnum = (teOne, teTwo, teThree);
 
+  [TclJsonEnumNames('one,two,three')]
+  TclTestNamedEnum = (tnOne, tnTwo, tnThree);
+
   TclTestEnumPropertyObject = class
   strict private
     FEnum: TclTestEnum;
+    FNamedEnum: TclTestNamedEnum;
     FEnumArray: TArray<TclTestEnum>;
+    FNamedEnumArray: TArray<TclTestNamedEnum>;
   public
     constructor Create;
 
@@ -172,6 +177,12 @@ type
 
     [TclJsonProperty('enumArray')]
     property EnumArray: TArray<TclTestEnum> read FEnumArray write FEnumArray;
+
+    [TclJsonProperty('namedEnum')]
+    property NamedEnum: TclTestNamedEnum read FNamedEnum write FNamedEnum;
+
+    [TclJsonProperty('namedEnumArray')]
+    property NamedEnumArray: TArray<TclTestNamedEnum> read FNamedEnumArray write FNamedEnumArray;
   end;
 
   TclJsonSerializerTests = class(TTestCase)
@@ -279,6 +290,7 @@ var
   obj: TclTestEnumPropertyObject;
   json: string;
   enumArr: TArray<TclTestEnum>;
+  namedEnumArr: TArray<TclTestNamedEnum>;
 begin
   serializer := nil;
   obj := nil;
@@ -287,21 +299,36 @@ begin
 
     obj := TclTestEnumPropertyObject.Create();
     obj.Enum := teTwo;
+    obj.NamedEnum := tnTwo;
 
     SetLength(enumArr, 2);
     obj.EnumArray := enumArr;
     enumArr[0] := teTwo;
     enumArr[1] := teThree;
 
+    SetLength(namedEnumArr, 2);
+    obj.NamedEnumArray := namedEnumArr;
+    namedEnumArr[0] := tnTwo;
+    namedEnumArr[1] := tnThree;
+
     json := serializer.ObjectToJson(obj);
-    CheckEquals('{"enum": teTwo, "enumArray": [teTwo, teThree]}', json);
+    CheckEquals(
+      '{"enum": teTwo, "enumArray": [teTwo, teThree], "namedEnum": two, "namedEnumArray": [two, three]}',
+      json);
     FreeAndNil(obj);
 
     obj := serializer.JsonToObject(TclTestEnumPropertyObject, json) as TclTestEnumPropertyObject;
-    Assert(teTwo = obj.Enum);
+    CheckTrue(teTwo = obj.Enum);
+    CheckTrue(tnTwo = obj.NamedEnum);
+
     CheckEquals(2, Length(obj.EnumArray));
-    Assert(teTwo = obj.EnumArray[0]);
-    Assert(teThree = obj.EnumArray[1]);
+    CheckTrue(teTwo = obj.EnumArray[0]);
+    CheckTrue(teThree = obj.EnumArray[1]);
+
+    CheckEquals(2, Length(obj.NamedEnumArray));
+    CheckTrue(tnTwo = obj.NamedEnumArray[0]);
+    CheckTrue(tnThree = obj.NamedEnumArray[1]);
+
     FreeAndNil(obj);
   finally
     obj.Free();

@@ -44,6 +44,14 @@ type
 
   TclJsonRequiredAttribute = class(TCustomAttribute);
 
+  TclJsonEnumNamesAttribute = class (TCustomAttribute)
+  strict private
+    FNames: TArray<string>;
+  public
+    constructor Create(const ANames: string);
+    property Names: TArray<string> read FNames;
+  end;
+
   TclJsonTypeNameMapAttribute = class(TCustomAttribute)
   strict private
     FPropertyName: string;
@@ -82,6 +90,14 @@ begin
   FPropertyName := APropertyName;
   FTypeName := ATypeName;
   FTypeClassName := ATypeClassName;
+end;
+
+{ TclJsonEnumNamesAttribute }
+
+constructor TclJsonEnumNamesAttribute.Create(const ANames: string);
+begin
+  inherited Create();
+  FNames := ANames.Split([',']);
 end;
 
 end.

@@ -37,7 +37,8 @@ type
     procedure GetPropertyAttributes(AProp: TRttiProperty; var APropAttr: TclJsonPropertyAttribute;
       var ARequiredAttr: TclJsonRequiredAttribute);
     function GetObjectClass(ATypeNameAttrs: TclJsonTypeNameMapAttributeList; AJsonObject: TclJSONObject): TRttiType;
-    function EnumNameToTValue(Name: string; EnumType: PTypeInfo): TValue;
+    function EnumNameToTValue(const Name: string; AProperty: TRttiProperty; EnumType: PTypeInfo): TValue;
+    function EnumTValueToName(AValue: TValue; AProperty: TRttiProperty): string;
 
     procedure SerializeArray(AProperty: TRttiProperty; AObject: TObject;
       Attribute: TclJsonPropertyAttribute; AJson: TclJsonObject);
@@ -139,7 +140,7 @@ begin
       if (elType.Kind = tkEnumeration)
         and (AJsonArray.Items[i] is TclJSONValue) then
       begin
-        rItemValue := EnumNameToTValue(AJsonArray.Items[i].ValueString, elType);
+        rItemValue := EnumNameToTValue(AJsonArray.Items[i].ValueString, AProperty, elType);
       end else
       begin
         raise EclJsonSerializerError.Create(cUnsupportedDataType);
@@ -154,12 +155,78 @@ begin
   end;
 end;
 
-function TclJsonSerializer.EnumNameToTValue(Name: string; EnumType: PTypeInfo): TValue;
+function TclJsonSerializer.EnumNameToTValue(const Name: string;
+  AProperty: TRttiProperty; EnumType: PTypeInfo): TValue;
 var
+  attr: TCustomAttribute;
+  names: TArray<string>;
+  t: TRttiType;
   V: integer;
 begin
+  if (AProperty.PropertyType is TRttiDynamicArrayType) then
+  begin
+    t := TRttiDynamicArrayType(AProperty.PropertyType).ElementType;
+  end else
+  if (AProperty.PropertyType is TRttiArrayType) then
+  begin
+    t := TRttiArrayType(AProperty.PropertyType).ElementType;
+  end else
+  begin
+    t := AProperty.PropertyType;
+  end;
+
+  for attr in t.GetAttributes() do
+  begin
+    if (attr is TclJsonEnumNamesAttribute) then
+    begin
+      names := TclJsonEnumNamesAttribute(attr).Names;
+      for V := Low(names) to High(names) do
+      begin
+        if (Name = names[V]) then
+        begin
+          TValue.Make(V, EnumType, Result);
+          Exit;
+        end;
+      end;
+    end;
+  end;
+
   V:= GetEnumValue(EnumType, Name);
   TValue.Make(V, EnumType, Result);
+end;
+
+function TclJsonSerializer.EnumTValueToName(AValue: TValue; AProperty: TRttiProperty): string;
+var
+  attr: TCustomAttribute;
+  names: TArray<string>;
+  t: TRttiType;
+begin
+  if (AProperty.PropertyType is TRttiDynamicArrayType) then
+  begin
+    t := TRttiDynamicArrayType(AProperty.PropertyType).ElementType;
+  end else
+  if (AProperty.PropertyType is TRttiArrayType) then
+  begin
+    t := TRttiArrayType(AProperty.PropertyType).ElementType;
+  end else
+  begin
+    t := AProperty.PropertyType;
+  end;
+
+  for attr in t.GetAttributes() do
+  begin
+    if (attr is TclJsonEnumNamesAttribute) then
+    begin
+      names := TclJsonEnumNamesAttribute(attr).Names;
+      if Length(names) > 0 then
+      begin
+        Result := names[AValue.AsOrdinal()];
+      end;
+      Exit;
+    end;
+  end;
+
+  Result := AValue.ToString();
 end;
 
 function TclJsonSerializer.JsonToObject(AObject: TObject; const AJson: string): TObject;
@@ -305,7 +372,7 @@ begin
           and (rProp.GetValue(Result).TypeInfo.Kind = tkEnumeration)
           and (member.Value is TclJSONValue) then
         begin
-          rValue := EnumNameToTValue(member.ValueString, rProp.GetValue(Result).TypeInfo);
+          rValue := EnumNameToTValue(member.ValueString, rProp, rProp.GetValue(Result).TypeInfo);
           rProp.SetValue(Result, rValue);
         end else
         begin
@@ -429,7 +496,8 @@ begin
           end else
           if (rProp.PropertyType.TypeKind = tkEnumeration) then
           begin
-            Result.AddValue(TclJsonPropertyAttribute(propAttr).Name, rProp.GetValue(AObject).ToString());
+            Result.AddValue(TclJsonPropertyAttribute(propAttr).Name,
+              EnumTValueToName(rProp.GetValue(AObject), rProp));
           end else
           begin
             raise EclJsonSerializerError.Create(cUnsupportedDataType);
@@ -491,7 +559,8 @@ begin
       end else
       if (rValue.GetArrayElement(i).Kind = tkEnumeration) then
       begin
-        arr.Add(TclJSONValue.Create(rValue.GetArrayElement(i).ToString()));
+        arr.Add(TclJSONValue.Create(
+          EnumTValueToName(rValue.GetArrayElement(i), AProperty)));
       end else
       begin
         raise EclJsonSerializerError.Create(cUnsupportedDataType);
