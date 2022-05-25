@@ -44,12 +44,14 @@ type
       Attribute: TclJsonPropertyAttribute; AJson: TclJsonObject);
     procedure DeserializeArray(AProperty: TRttiProperty; AObject: TObject; AJsonArray: TclJSONArray);
 
+    function Deserialize(ATypeInfo: PTypeInfo; const AJson: TclJSONObject): TObject; overload;
     function Deserialize(AType: TClass; const AJson: TclJSONObject): TObject; overload;
     function Deserialize(AObject: TObject; const AJson: TclJSONObject): TObject; overload;
     function Serialize(AObject: TObject): TclJSONObject;
   public
     function JsonToObject(AType: TClass; const AJson: string): TObject; overload; override;
     function JsonToObject(AObject: TObject; const AJson: string): TObject; overload; override;
+    function JsonToObject<T>(const AJson: string): T; overload;
     function ObjectToJson(AObject: TObject): string; override;
   end;
 
@@ -85,6 +87,42 @@ begin
     end;
   finally
     ctx.Free()
+  end;
+end;
+
+function TclJsonSerializer.Deserialize(ATypeInfo: PTypeInfo; const AJson: TclJSONObject): TObject;
+var
+  ctx: TRttiContext;
+  lType, rType: TRttiType;
+  instType: TRttiInstanceType;
+  rValue: TValue;
+  typeNameAttrs: TclJsonTypeNameMapAttributeList;
+begin
+  Result := nil;
+  if (AJson.Count = 0) then Exit;
+
+  ctx := TRttiContext.Create();
+  try
+    rType := ctx.GetType(ATypeInfo);
+
+    GetTypeAttributes(rType, typeNameAttrs);
+    lType := GetObjectClass(typeNameAttrs, AJson);
+    if (lType = nil) then
+    begin
+      lType := rType;
+    end;
+    instType := lType.AsInstance;
+    rValue := instType.GetMethod('Create').Invoke(instType.MetaclassType, []);
+
+    Result := rValue.AsObject;
+    try
+      Result := Deserialize(Result, AJson);
+    except
+      Result.Free();
+      raise;
+    end;
+  finally
+    ctx.Free();
   end;
 end;
 
@@ -236,6 +274,18 @@ begin
   obj := TclJSONBase.ParseObject(AJson);
   try
     Result := Deserialize(AObject, obj);
+  finally
+    obj.Free();
+  end;
+end;
+
+function TclJsonSerializer.JsonToObject<T>(const AJson: string): T;
+var
+  obj: TclJSONObject;
+begin
+  obj := TclJSONBase.ParseObject(AJson);
+  try
+    Result := TValue.From(Deserialize(TypeInfo(T), obj)).AsType<T>;
   finally
     obj.Free();
   end;
