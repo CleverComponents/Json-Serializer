@@ -185,6 +185,40 @@ type
     property NamedEnumArray: TArray<TclTestNamedEnum> read FNamedEnumArray write FNamedEnumArray;
   end;
 
+  TclMapObjectItem = class
+  strict private
+    FValue: Integer;
+  public
+    [TclJsonProperty('value')]
+    property Value: Integer read FValue write FValue;
+  end;
+
+  TclMapObject = class
+  private
+    FObjects: TArray<TPair<string, TclMapObjectItem>>;
+
+    procedure SetObjects(const Value: TArray<TPair<string, TclMapObjectItem>>);
+  public
+    constructor Create;
+    destructor Destroy; override;
+
+    [TclJsonMapAttribute('objects')]
+    property Objects: TArray<TPair<string, TclMapObjectItem>> read FObjects write SetObjects;
+  end;
+
+  TclMultipleTypeMapObject = class
+  private
+    FObjects: TArray<TPair<string, TclTestBaseObject>>;
+
+    procedure SetObjects(const Value: TArray<TPair<string, TclTestBaseObject>>);
+  public
+    constructor Create;
+    destructor Destroy; override;
+
+    [TclJsonMapAttribute('objects')]
+    property Objects: TArray<TPair<string, TclTestBaseObject>> read FObjects write SetObjects;
+  end;
+
   TclJsonSerializerTests = class(TTestCase)
   published
     procedure TestDeserialize;
@@ -196,6 +230,8 @@ type
     procedure TestMultipleTypeArray;
     procedure TestInheritedTypes;
     procedure TestEnumProperty;
+    procedure TestMapProperty;
+    procedure TestMultipleTypeMap;
   end;
 
 implementation
@@ -278,6 +314,32 @@ begin
     CheckEquals(123, obj.IntegerValue);
     CheckEquals('asd', obj.Value);
     CheckEquals(True, obj.BooleanValue);
+  finally
+    obj.Free();
+    serializer.Free();
+  end;
+end;
+
+procedure TclJsonSerializerTests.TestMapProperty;
+const
+  jsonEtalon = '{"objects": {"obj1": {"value": 1}, "obj2": {"value": 2}}}';
+var
+  serializer: TclJsonSerializer;
+  obj: TclMapObject;
+  json: string;
+begin
+  serializer := nil;
+  obj := nil;
+  try
+    serializer := TclJsonSerializer.Create();
+    obj := serializer.JsonToObject<TclMapObject>(jsonEtalon);
+    CheckTrue(nil <> obj.Objects);
+    CheckEquals(2, Length(obj.Objects));
+    CheckEquals('obj2', obj.Objects[1].Key);
+    CheckEquals(2, obj.Objects[1].Value.Value);
+
+    json := serializer.ObjectToJson(obj);
+    CheckEquals(jsonEtalon, json);
   finally
     obj.Free();
     serializer.Free();
@@ -419,6 +481,39 @@ begin
     CheckEquals('TclTestBaseObject', obj.ObjArray[1].ClassName);
 
     FreeAndNil(obj);
+  finally
+    obj.Free();
+    serializer.Free();
+  end;
+end;
+
+procedure TclJsonSerializerTests.TestMultipleTypeMap;
+const
+  jsonEtalon = '{"objects": {"obj1": {"tag": "base", "name": "base class"}, "obj2": {"subname": "inherited subname", "tag": "inherited", "name": "inherited class"}}}';
+var
+  serializer: TclJsonSerializer;
+  obj: TclMultipleTypeMapObject;
+  json: string;
+begin
+  serializer := nil;
+  obj := nil;
+  try
+    serializer := TclJsonSerializer.Create();
+    obj := serializer.JsonToObject<TclMultipleTypeMapObject>(jsonEtalon);
+    CheckTrue(nil <> obj.Objects);
+    CheckEquals(2, Length(obj.Objects));
+
+    CheckEquals('obj1', obj.Objects[0].Key);
+    CheckEquals('base class', obj.Objects[0].Value.Name);
+    CheckTrue(TclTestBaseObject = obj.Objects[0].Value.ClassType);
+
+    CheckEquals('obj2', obj.Objects[1].Key);
+    CheckEquals('inherited class', obj.Objects[1].Value.Name);
+    CheckTrue(TclTestInheritedObject = obj.Objects[1].Value.ClassType);
+    CheckEquals('inherited subname', TclTestInheritedObject(obj.Objects[1].Value).SubName);
+
+    json := serializer.ObjectToJson(obj);
+    CheckEquals(jsonEtalon, json);
   finally
     obj.Free();
     serializer.Free();
@@ -684,6 +779,64 @@ constructor TclTestEnumPropertyObject.Create;
 begin
   inherited Create();
   FEnumArray := nil;
+end;
+
+{ TclMapObject }
+
+constructor TclMapObject.Create;
+begin
+  inherited Create();
+  FObjects := nil;
+end;
+
+destructor TclMapObject.Destroy;
+begin
+  SetObjects(nil);
+  inherited Destroy();
+end;
+
+procedure TclMapObject.SetObjects(const Value: TArray<TPair<string, TclMapObjectItem>>);
+var
+  obj: TPair<string, TclMapObjectItem>;
+begin
+  if (FObjects <> nil) then
+  begin
+    for obj in FObjects do
+    begin
+      obj.Value.Free();
+    end;
+  end;
+
+  FObjects := Value;
+end;
+
+{ TclMultipleTypeMapObject }
+
+constructor TclMultipleTypeMapObject.Create;
+begin
+  inherited Create();
+  FObjects := nil;
+end;
+
+destructor TclMultipleTypeMapObject.Destroy;
+begin
+  SetObjects(nil);
+  inherited Destroy();
+end;
+
+procedure TclMultipleTypeMapObject.SetObjects(const Value: TArray<TPair<string, TclTestBaseObject>>);
+var
+  obj: TPair<string, TclTestBaseObject>;
+begin
+  if (FObjects <> nil) then
+  begin
+    for obj in FObjects do
+    begin
+      obj.Value.Free();
+    end;
+  end;
+
+  FObjects := Value;
 end;
 
 initialization

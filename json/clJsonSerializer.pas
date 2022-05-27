@@ -42,7 +42,11 @@ type
 
     procedure SerializeArray(AProperty: TRttiProperty; AObject: TObject;
       Attribute: TclJsonPropertyAttribute; AJson: TclJsonObject);
+    procedure SerializeMap(AProperty: TRttiProperty; AObject: TObject;
+      Attribute: TclJsonPropertyAttribute; AJson: TclJsonObject);
+
     procedure DeserializeArray(AProperty: TRttiProperty; AObject: TObject; AJsonArray: TclJSONArray);
+    procedure DeserializeMap(AProperty: TRttiProperty; AObject: TObject; AJsonObject: TclJSONObject);
 
     function Deserialize(ATypeInfo: PTypeInfo; const AJson: TclJSONObject): TObject; overload;
     function Deserialize(AType: TClass; const AJson: TclJSONObject): TObject; overload;
@@ -114,7 +118,7 @@ begin
     instType := lType.AsInstance;
     rValue := instType.GetMethod('Create').Invoke(instType.MetaclassType, []);
 
-    Result := rValue.AsObject;
+    Result := rValue.AsObject();
     try
       Result := Deserialize(Result, AJson);
     except
@@ -149,7 +153,7 @@ begin
   try
     TValue.Make(@pArr, AProperty.PropertyType.Handle, rValue);
 
-    for i := 0 to AJsonArray.Count - 1 do
+    for i := 0 to len - 1 do
     begin
       if (elType.Kind = tkClass)
         and (AJsonArray.Items[i] is TclJSONObject) then
@@ -190,6 +194,73 @@ begin
     AProperty.SetValue(AObject, rValue);
   finally
     DynArrayClear(pArr, AProperty.PropertyType.Handle);
+  end;
+end;
+
+procedure TclJsonSerializer.DeserializeMap(AProperty: TRttiProperty;
+  AObject: TObject; AJsonObject: TclJSONObject);
+var
+  elType: PTypeInfo;
+  len: NativeInt;
+  pArr: Pointer;
+  ctx: TRttiContext;
+  pairType: TRttiType;
+  pairKey, pairValue: TRttiField;
+  rValue, pair: TValue;
+  i: Integer;
+  itemClass: TClass;
+  mapName: string;
+  mapObject: TObject;
+begin
+  len := AJsonObject.Count;
+  if (len = 0) then Exit;
+
+  if (GetTypeData(AProperty.PropertyType.Handle).DynArrElType = nil) then Exit;
+
+  elType := GetTypeData(AProperty.PropertyType.Handle).DynArrElType^;
+  if (elType.Kind <> tkRecord) then
+  begin
+    raise EclJsonSerializerError.Create(cUnsupportedDataType);
+  end;
+
+  pArr := nil;
+  ctx := TRttiContext.Create();
+  try
+    DynArraySetLength(pArr, AProperty.PropertyType.Handle, 1, @len);
+    TValue.Make(@pArr, AProperty.PropertyType.Handle, rValue);
+
+    pairType := ctx.GetType(elType);
+    pairKey := pairType.GetField('Key');
+    pairValue := pairType.GetField('Value');
+    if (pairKey = nil) or (pairValue = nil) then
+    begin
+      raise EclJsonSerializerError.Create(cUnsupportedDataType);
+    end;
+
+    itemClass := pairValue.FieldType.Handle^.TypeData.ClassType;
+
+    for i := 0 to len - 1 do
+    begin
+      if not (AJsonObject.Members[i].Value is TclJSONObject) then
+      begin
+        raise EclJsonSerializerError.Create(cUnsupportedDataType);
+      end;
+
+      pair := rValue.GetArrayElement(i);
+
+      mapName := AJsonObject.Members[i].Name;
+      pairKey.SetValue(pair.GetReferenceToRawData(), mapName);
+
+      mapObject := Deserialize(itemClass, TclJSONObject(AJsonObject.Members[i].Value));
+      pairValue.SetValue(pair.GetReferenceToRawData(), mapObject);
+
+      rValue.SetArrayElement(i, pair);
+    end;
+
+    AProperty.SetValue(AObject, rValue);
+  finally
+    DynArrayClear(pArr, AProperty.PropertyType.Handle);
+    ctx.Free();
   end;
 end;
 
@@ -339,7 +410,7 @@ begin
     instType := lType.AsInstance;
     rValue := instType.GetMethod('Create').Invoke(instType.MetaclassType, []);
 
-    Result := rValue.AsObject;
+    Result := rValue.AsObject();
     try
       Result := Deserialize(Result, AJson);
     except
@@ -384,6 +455,12 @@ begin
         member := AJson.MemberByName(TclJsonPropertyAttribute(propAttr).Name);
         if (member = nil) then Continue;
 
+        if (rProp.PropertyType.TypeKind = tkDynArray)
+          and (propAttr is TclJsonMapAttribute)
+          and (member.Value is TclJSONObject) then
+        begin
+          DeserializeMap(rProp, Result, TclJSONObject(member.Value));
+        end else
         if (rProp.PropertyType.TypeKind = tkDynArray)
           and (member.Value is TclJSONArray) then
         begin
@@ -511,6 +588,11 @@ begin
         begin
           nonSerializable := False;
 
+          if (rProp.PropertyType.TypeKind = tkDynArray)
+            and (propAttr is TclJsonMapAttribute) then
+          begin
+            SerializeMap(rProp, AObject, TclJsonPropertyAttribute(propAttr), Result);
+          end else
           if (rProp.PropertyType.TypeKind = tkDynArray) then
           begin
             SerializeArray(rProp, AObject, TclJsonPropertyAttribute(propAttr), Result);
@@ -616,6 +698,53 @@ begin
         raise EclJsonSerializerError.Create(cUnsupportedDataType);
       end;
     end;
+  end;
+end;
+
+procedure TclJsonSerializer.SerializeMap(AProperty: TRttiProperty;
+  AObject: TObject; Attribute: TclJsonPropertyAttribute; AJson: TclJsonObject);
+var
+  ctx: TRttiContext;
+  map: TclJsonObject;
+  rValue, pair: TValue;
+  pairType: TRttiType;
+  pairKey, pairValue: TRttiField;
+  i: Integer;
+  mapName: string;
+  mapObject: TObject;
+begin
+  rValue := AProperty.GetValue(AObject);
+
+  if (rValue.GetArrayLength() = 0) then Exit;
+
+  map := TclJSONObject.Create();
+  AJson.AddMember(Attribute.Name, map);
+
+  ctx := TRttiContext.Create();
+  try
+    for i := 0 to rValue.GetArrayLength() - 1 do
+    begin
+      if (rValue.GetArrayElement(i).Kind <> tkRecord) then
+      begin
+        raise EclJsonSerializerError.Create(cUnsupportedDataType);
+      end;
+
+      pair := rValue.GetArrayElement(i);
+      pairType := ctx.GetType(pair.TypeInfo);
+      pairKey := pairType.GetField('Key');
+      pairValue := pairType.GetField('Value');
+
+      if (pairKey = nil) or (pairValue = nil) then
+      begin
+        raise EclJsonSerializerError.Create(cUnsupportedDataType);
+      end;
+
+      mapName := pairKey.GetValue(pair.GetReferenceToRawData()).ToString();
+      mapObject := pairValue.GetValue(pair.GetReferenceToRawData()).AsObject();
+      map.AddMember(mapName, Serialize(mapObject));
+    end;
+  finally
+    ctx.Free();
   end;
 end;
 
