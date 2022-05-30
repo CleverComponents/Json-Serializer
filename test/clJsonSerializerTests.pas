@@ -171,6 +171,7 @@ type
     FNamedEnumArray: TArray<TclTestNamedEnum>;
   public
     constructor Create;
+    destructor Destroy; override;
 
     [TclJsonProperty('enum')]
     property Enum: TclTestEnum read FEnum write FEnum;
@@ -714,9 +715,11 @@ end;
 
 destructor TclTestObject.Destroy;
 begin
-  SetObjArray(nil);
-
-  FSubObject.Free();
+  ObjArray := nil;
+  BoolArray := nil;
+  StrArray := nil;
+  IntArray := nil;
+  SubObject := nil;
 
   inherited Destroy();
 end;
@@ -754,7 +757,7 @@ end;
 
 destructor TclTestMultipleTypeArray.Destroy;
 begin
-  SetObjArray(nil);
+  ObjArray := nil;
   inherited Destroy();
 end;
 
@@ -778,7 +781,17 @@ end;
 constructor TclTestEnumPropertyObject.Create;
 begin
   inherited Create();
+
   FEnumArray := nil;
+  FNamedEnumArray := nil;
+end;
+
+destructor TclTestEnumPropertyObject.Destroy;
+begin
+  NamedEnumArray := nil;
+  EnumArray := nil;
+
+  inherited Destroy();
 end;
 
 { TclMapObject }
@@ -791,7 +804,7 @@ end;
 
 destructor TclMapObject.Destroy;
 begin
-  FObjects.Free();
+  Objects := nil;
   inherited Destroy();
 end;
 
@@ -811,7 +824,7 @@ end;
 
 destructor TclMultipleTypeMapObject.Destroy;
 begin
-  FObjects.Free();
+  Objects := nil;
   inherited Destroy();
 end;
 
