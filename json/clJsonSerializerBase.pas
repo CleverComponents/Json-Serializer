@@ -44,6 +44,8 @@ type
 
   TclJsonMapAttribute = class(TclJsonPropertyAttribute);
 
+  TclJsonListAttribute = class(TclJsonPropertyAttribute);
+
   TclJsonRequiredAttribute = class(TCustomAttribute);
 
   TclJsonEnumNamesAttribute = class (TCustomAttribute)

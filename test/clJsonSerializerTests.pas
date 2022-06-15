@@ -220,6 +220,36 @@ type
     property Objects: TObjectDictionary<string, TclTestBaseObject> read FObjects write SetObjects;
   end;
 
+  TclAnyTypePropertyObject = class
+  private
+    FAny: string;
+  public
+    [TclJsonProperty('any')]
+    property Any: string read FAny write FAny;
+  end;
+
+
+  TclListObjectItem = class
+  strict private
+    FValue: Integer;
+  public
+    [TclJsonProperty('value')]
+    property Value: Integer read FValue write FValue;
+  end;
+
+  TclListObject = class
+  private
+    FObjects: TObjectList<TclListObjectItem>;
+
+    procedure SetObjects(const Value: TObjectList<TclListObjectItem>);
+  public
+    constructor Create;
+    destructor Destroy; override;
+
+    [TclJsonList('objects')]
+    property Objects: TObjectList<TclListObjectItem> read FObjects write SetObjects;
+  end;
+
   TclJsonSerializerTests = class(TTestCase)
   published
     procedure TestDeserialize;
@@ -233,11 +263,20 @@ type
     procedure TestEnumProperty;
     procedure TestMapProperty;
     procedure TestMultipleTypeMap;
+    procedure TestNonObjectMapProperty;
+    procedure TestArrayMapProperty;
+    procedure TestObjectListProperty;
+    procedure TestAnyTypeProperty;
   end;
 
 implementation
 
 { TclJsonSerializerTests }
+
+procedure TclJsonSerializerTests.TestArrayMapProperty;
+begin
+  CheckTrue(False, 'not implemented');
+end;
 
 procedure TclJsonSerializerTests.TestDeserialize;
 const
@@ -289,6 +328,27 @@ begin
 
     CheckTrue(obj.ObjArray[1] <> nil);
     CheckEquals('an2', obj.ObjArray[1].Name);
+  finally
+    obj.Free();
+    serializer.Free();
+  end;
+end;
+
+procedure TclJsonSerializerTests.TestAnyTypeProperty;
+const
+  jsonEtalon = '{"any": {"name": "qwerty"}}';
+var
+  serializer: TclJsonSerializer;
+  obj: TclAnyTypePropertyObject;
+begin
+  serializer := nil;
+  obj := nil;
+  try
+    serializer := TclJsonSerializer.Create();
+
+    obj := serializer.JsonToObject<TclAnyTypePropertyObject>(jsonEtalon);
+
+    CheckEquals('{"name": "qwerty"}', obj.Any);
   finally
     obj.Free();
     serializer.Free();
@@ -521,6 +581,11 @@ begin
   end;
 end;
 
+procedure TclJsonSerializerTests.TestNonObjectMapProperty;
+begin
+  CheckTrue(False, 'not implemented');
+end;
+
 procedure TclJsonSerializerTests.TestNonSerializable;
 var
   serializer: TclJsonSerializer;
@@ -546,6 +611,31 @@ begin
     except
       on EclJsonSerializerError do;
     end;
+  finally
+    obj.Free();
+    serializer.Free();
+  end;
+end;
+
+procedure TclJsonSerializerTests.TestObjectListProperty;
+const
+  jsonEtalon = '{"objects": [{"value": 1}, {"value": 2}]}';
+var
+  serializer: TclJsonSerializer;
+  obj: TclListObject;
+  json: string;
+begin
+  serializer := nil;
+  obj := nil;
+  try
+    serializer := TclJsonSerializer.Create();
+    obj := serializer.JsonToObject<TclListObject>(jsonEtalon);
+    CheckTrue(nil <> obj.Objects);
+    CheckEquals(2, obj.Objects.Count);
+    CheckEquals(2, obj.Objects[1].Value);
+
+    json := serializer.ObjectToJson(obj);
+    CheckEquals(jsonEtalon, json);
   finally
     obj.Free();
     serializer.Free();
@@ -829,6 +919,26 @@ begin
 end;
 
 procedure TclMultipleTypeMapObject.SetObjects(const Value: TObjectDictionary<string, TclTestBaseObject>);
+begin
+  FObjects.Free();
+  FObjects := Value;
+end;
+
+{ TclListObject }
+
+constructor TclListObject.Create;
+begin
+  inherited Create();
+  FObjects := nil;
+end;
+
+destructor TclListObject.Destroy;
+begin
+  Objects := nil;
+  inherited Destroy();
+end;
+
+procedure TclListObject.SetObjects(const Value: TObjectList<TclListObjectItem>);
 begin
   FObjects.Free();
   FObjects := Value;

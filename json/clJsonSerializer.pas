@@ -44,9 +44,12 @@ type
       Attribute: TclJsonPropertyAttribute; AJson: TclJsonObject);
     procedure SerializeMap(AProperty: TRttiProperty; AObject: TObject;
       Attribute: TclJsonPropertyAttribute; AJson: TclJsonObject);
+    procedure SerializeList(AProperty: TRttiProperty; AObject: TObject;
+      Attribute: TclJsonPropertyAttribute; AJson: TclJsonObject);
 
     procedure DeserializeArray(AProperty: TRttiProperty; AObject: TObject; AJsonArray: TclJSONArray);
     procedure DeserializeMap(AProperty: TRttiProperty; AObject: TObject; AJsonObject: TclJSONObject);
+    procedure DeserializeList(AProperty: TRttiProperty; AObject: TObject; AJsonArray: TclJSONArray);
 
     function Deserialize(ATypeInfo: PTypeInfo; const AJson: TclJSONObject): TObject; overload;
     function Deserialize(AType: TClass; const AJson: TclJSONObject): TObject; overload;
@@ -64,6 +67,7 @@ type
 resourcestring
   cUnsupportedDataType = 'Unsupported data type';
   cDictionaryRequired = 'Dictionary type is required to serialize object maps';
+  cObjectListRequired = 'ObjectList type is required to serialize object arrays';
   cNonSerializable = 'The object is not serializable';
 
 implementation
@@ -200,6 +204,44 @@ begin
   end;
 end;
 
+procedure TclJsonSerializer.DeserializeList(AProperty: TRttiProperty; AObject: TObject; AJsonArray: TclJSONArray);
+var
+  i: Integer;
+  listType: TRttiInstanceType;
+  objectList, itemValue: TValue;
+  addMethod: TRttiMethod;
+  itemType: TRttiType;
+  itemClass: TClass;
+begin
+  if (AJsonArray.Count = 0) then Exit;
+
+  listType := AProperty.PropertyType.AsInstance;
+  addMethod := listType.GetMethod('Add');
+
+  if (addMethod = nil) then
+  begin
+    raise EclJsonSerializerError.Create(cObjectListRequired);
+  end;
+
+  itemType := addMethod.GetParameters[0].ParamType;
+  itemClass := itemType.Handle^.TypeData.ClassType;
+
+  objectList := listType.GetMethod('Create').Invoke(listType.MetaclassType, [True]);
+  AProperty.SetValue(AObject, objectList);
+
+  for i := 0 to AJsonArray.Count - 1 do
+  begin
+    if not (AJsonArray.Items[i] is TclJSONObject) then
+    begin
+      raise EclJsonSerializerError.Create(cUnsupportedDataType);
+    end;
+
+    itemValue := Deserialize(itemClass, TclJSONObject(AJsonArray.Items[i]));
+
+    addMethod.Invoke(objectList, [itemValue]);
+  end;
+end;
+
 procedure TclJsonSerializer.DeserializeMap(AProperty: TRttiProperty;
   AObject: TObject; AJsonObject: TclJSONObject);
 var
@@ -213,6 +255,7 @@ var
 begin
   if (AJsonObject.Count = 0) then Exit;
 
+  //TODO deserialize non-object types, including dynarrays
   dictOwnerships := TValue.From<TDictionaryOwnerships>([doOwnsValues]);
   dictType := AProperty.PropertyType.AsInstance;
 
@@ -224,8 +267,10 @@ begin
   end;
 
   itemType := addMethod.GetParameters[1].ParamType;
+  //TODO deserialize non-object types, including dynarrays
   itemClass := itemType.Handle^.TypeData.ClassType;
 
+  //TODO deserialize non-object types, including dynarrays
   dictionary := dictType.GetMethod('Create').Invoke(dictType.MetaclassType, [dictOwnerships, 0]);
   AProperty.SetValue(AObject, dictionary);
 
@@ -234,6 +279,7 @@ begin
     if not (AJsonObject.Members[i].Value is TclJSONObject) then Continue;
 
     mapName := AJsonObject.Members[i].Name;
+    //TODO deserialize non-object types, including dynarrays
     mapObject := Deserialize(itemClass, TclJSONObject(AJsonObject.Members[i].Value));
 
     addMethod.Invoke(dictionary, [mapName, mapObject]);
@@ -437,10 +483,14 @@ begin
           DeserializeArray(rProp, Result, TclJSONArray(member.Value));
         end else
         if (rProp.PropertyType.TypeKind = tkClass)
-          and (propAttr is TclJsonMapAttribute)
-          and (member.Value is TclJSONObject) then
+          and (propAttr is TclJsonMapAttribute) then
         begin
           DeserializeMap(rProp, Result, TclJSONObject(member.Value));
+        end else
+        if (rProp.PropertyType.TypeKind = tkClass)
+          and (propAttr is TclJsonListAttribute) then
+        begin
+          DeserializeList(rProp, Result, TclJSONArray(member.Value));
         end else
         if (rProp.PropertyType.TypeKind = tkClass)
           and (member.Value is TclJSONObject) then
@@ -573,6 +623,11 @@ begin
           begin
             SerializeMap(rProp, AObject, TclJsonPropertyAttribute(propAttr), Result);
           end else
+          if (rProp.PropertyType.TypeKind = tkClass)
+            and (propAttr is TclJsonListAttribute) then
+          begin
+            SerializeList(rProp, AObject, TclJsonPropertyAttribute(propAttr), Result);
+          end else
           if (rProp.PropertyType.TypeKind = tkClass) then
           begin
             Result.AddMember(TclJsonPropertyAttribute(propAttr).Name, Serialize(rProp.GetValue(AObject).AsObject()));
@@ -677,6 +732,45 @@ begin
   end;
 end;
 
+procedure TclJsonSerializer.SerializeList(AProperty: TRttiProperty;
+  AObject: TObject; Attribute: TclJsonPropertyAttribute; AJson: TclJsonObject);
+var
+  i, count: Integer;
+  objectList, value: TValue;
+  listType: TRttiType;
+  countProp: TRttiProperty;
+  itemsProp: TRttiIndexedProperty;
+  arr: TclJSONArray;
+begin
+  objectList := AProperty.GetValue(AObject);
+
+  listType := AProperty.PropertyType.AsInstance;
+  countProp := listType.GetProperty('Count');
+  itemsProp := listType.GetIndexedProperty('Items');
+
+  if (countProp = nil) or (itemsProp = nil) then
+  begin
+    raise EclJsonSerializerError.Create(cObjectListRequired);
+  end;
+
+  count := countProp.GetValue(objectList.AsObject()).AsInteger;
+  if (count = 0) then Exit;
+
+  arr := TclJSONArray.Create();
+  AJson.AddMember(Attribute.Name, arr);
+
+  for i := 0 to count - 1 do
+  begin
+    value := itemsProp.GetValue(objectList.AsObject(), [i]);
+    if (value.Kind <> tkClass) then
+    begin
+      raise EclJsonSerializerError.Create(cUnsupportedDataType);
+    end;
+
+    arr.Add(Serialize(value.AsObject()));
+  end;
+end;
+
 procedure TclJsonSerializer.SortMapKeys(var AKeyArray: TValue);
 begin
   TArray.Sort<string>(AKeyArray.AsType<TArray<string>>());
@@ -692,7 +786,6 @@ var
   toArrayMethod: TRttiMethod;
   count, i: Integer;
   map: TclJsonObject;
-  ctx: TRttiContext;
 begin
   dictionary := AProperty.GetValue(AObject);
 
@@ -724,22 +817,18 @@ begin
   map := TclJSONObject.Create();
   AJson.AddMember(Attribute.Name, map);
 
-  ctx := TRttiContext.Create();
-  try
-    for i := 0 to count - 1 do
+  for i := 0 to count - 1 do
+  begin
+    if not (keyArray.GetArrayElement(i).Kind in [tkString, tkWString, tkLString, tkUString]) then
     begin
-      if not (keyArray.GetArrayElement(i).Kind in [tkString, tkWString, tkLString, tkUString]) then
-      begin
-        raise EclJsonSerializerError.Create(cUnsupportedDataType);
-      end;
-
-      key := keyArray.GetArrayElement(i);
-      value := itemsProp.GetValue(dictionary.AsObject(), [key]);
-
-      map.AddMember(key.ToString(), Serialize(value.AsObject()));
+      raise EclJsonSerializerError.Create(cUnsupportedDataType);
     end;
-  finally
-    ctx.Free();
+
+    key := keyArray.GetArrayElement(i);
+    value := itemsProp.GetValue(dictionary.AsObject(), [key]);
+
+    //TODO serialize non-object types, including dynarrays
+    map.AddMember(key.ToString(), Serialize(value.AsObject()));
   end;
 end;
 
